@@ -42,7 +42,39 @@ func (c *Client) rollbackPath() string {
 func (c *Client) recoverPending() error {
 	raw, err := os.ReadFile(c.pendingPath())
 	if os.IsNotExist(err) {
-		return nil
+		// An interrupted hard-link reservation can leave an orphan rollback
+		// link before its journal is installed. In that phase no new payload
+		// has been published. Remove the link only if its inode still matches
+		// the currently completed backup; otherwise fail closed.
+		rollbackInfo, statErr := os.Lstat(c.rollbackPath())
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		if statErr != nil {
+			return fmt.Errorf("inspect orphan local backup link: %w", statErr)
+		}
+		meta, readErr := os.ReadFile(c.metaPath)
+		if readErr != nil {
+			return fmt.Errorf("cannot safely resolve orphan local backup link: %w", readErr)
+		}
+		var current Metadata
+		if err := json.Unmarshal(meta, &current); err != nil {
+			return fmt.Errorf("read completed metadata for orphan recovery: %w", err)
+		}
+		if filepath.Dir(current.Name) != c.dir {
+			return fmt.Errorf("orphan local backup has unexpected metadata target")
+		}
+		currentInfo, statErr := os.Lstat(current.Name)
+		if statErr != nil {
+			return fmt.Errorf("inspect completed backup for orphan recovery: %w", statErr)
+		}
+		if !os.SameFile(rollbackInfo, currentInfo) {
+			return fmt.Errorf("orphan rollback differs from completed backup; refusing cleanup")
+		}
+		if err := fsutil.Remove(c.rollbackPath()); err != nil {
+			return fmt.Errorf("remove verified orphan backup link: %w", err)
+		}
+		return fsutil.SyncDirMaybe(c.dir)
 	}
 	if err != nil {
 		return fmt.Errorf("read pending local backup: %w", err)
