@@ -5,8 +5,12 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,3 +24,8 @@ jobs:
         run: go test -count=1 -v -run 'TestUpload(MetadataRenameFailurePreservesLastGoodBackup|RecoveryAfterCrashBetweenDataAndMetadata|RollbackSameSecondTimestampCollision|MetadataRenameFailureWithoutPriorBackup)$' ./auto/file
       - name: Run all file-backed storage client tests
         run: go test -count=1 ./auto/file
+      - name: Run race checks on Linux
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 ./auto/file
+      - name: Inspect formatter
+        run: gofmt -d auto/file/file.go auto/file/file_atomic_test.go auto/file/transaction.go
