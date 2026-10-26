@@ -1,0 +1,39 @@
+name: Local auto-backup internal filename qualification
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Baseline or candidate source branch
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Format verification on LF checkout
+        if: runner.os != 'Windows'
+        run: test -z "$(gofmt -l auto/file/file.go auto/file/reserved_backup_filename_test.go)"
+      - name: Exact reserved-name and ordinary-name regressions
+        run: go test -count=1 -run 'TestNewClient(RejectsInternalBackupFilenames|AllowsOrdinaryBackupFilenames)$' ./auto/file
+      - name: Full file-backup package
+        run: go test -count=1 ./auto/file
+      - name: Race check on filename validation
+        run: go test -race -count=1 -run 'TestNewClient(RejectsInternalBackupFilenames|AllowsOrdinaryBackupFilenames)$' ./auto/file
