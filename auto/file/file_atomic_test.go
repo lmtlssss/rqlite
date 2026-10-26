@@ -189,3 +189,23 @@ func TestUploadSameIDMetadataRollbackUsesGeneration(t *testing.T) {
 	}
 	assertLastGoodFileBackup(t,c,"same-id",[]byte("good"))
 }
+
+func TestUploadRecoveryClearsOrphanPrejournalHardLink(t *testing.T) {
+	ctx := context.Background()
+	c, err := NewClient(t.TempDir(), "backup.sqlite", nil)
+	if err != nil { t.Fatal(err) }
+	if err := c.Upload(ctx, bytes.NewReader([]byte("prior")), "old"); err != nil { t.Fatal(err) }
+
+	// A power loss after preserving the old inode but before publishing
+	// the journal leaves an unneeded rollback link and the old stable file.
+	if err := os.Link(filepath.Join(c.dir, c.name), c.rollbackPath()); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	restarted, err := NewClient(c.dir, c.name, nil)
+	if err != nil { t.Fatal(err) }
+	assertLastGoodFileBackup(t, restarted, "old", []byte("prior"))
+	if err := restarted.Upload(ctx, bytes.NewReader([]byte("next")), "new"); err != nil {
+		t.Fatalf("orphan link blocked next upload: %v", err)
+	}
+	assertLastGoodFileBackup(t, restarted, "new", []byte("next"))
+}
