@@ -24,8 +24,8 @@ jobs:
       - name: Inspect formatting and run behavioral proof
         run: gofmt -d auto/file/file.go auto/file/metadata_rename_failure_test.go
       - name: Run deterministic metadata rename fault regression
-        run: go test -count=1 -run 'TestUpload(MetadataRenameFailurePreservesLastSuccessfulBackup|FirstMetadataRenameFailureLeavesNoPublishedFile|PayloadRenameFailureKeepsPreviousBackup)$' ./auto/file
+        run: go test -count=1 -run 'TestUpload(MetadataRenameFailurePreservesLastSuccessfulBackup|FirstMetadataRenameFailureLeavesNoPublishedFile|PayloadRenameFailureKeepsPreviousBackup|MetadataRollbackFailurePreservesRecoverablePriorCopy|SuccessfulReplacementRemovesRollbackCopy)$' ./auto/file
       - name: Full auto/file package
         run: go test -count=1 ./auto/file
       - name: Go race on affected paths
-        run: go test -race -count=1 -run 'TestUpload(MetadataRenameFailurePreservesLastSuccessfulBackup|FirstMetadataRenameFailureLeavesNoPublishedFile|PayloadRenameFailureKeepsPreviousBackup)$' ./auto/file
+        run: go test -race -count=1 -run 'TestUpload(MetadataRenameFailurePreservesLastSuccessfulBackup|FirstMetadataRenameFailureLeavesNoPublishedFile|PayloadRenameFailureKeepsPreviousBackup|MetadataRollbackFailurePreservesRecoverablePriorCopy|SuccessfulReplacementRemovesRollbackCopy)$' ./auto/file
