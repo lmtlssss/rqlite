@@ -72,8 +72,8 @@ func NewClient(dir, name string, opt *Options) (*Client, error) {
 	fsutil.Remove(touchPath)
 
 	c := &Client{
-		dir:      dir,
-		name:     name,
+		dir:        dir,
+		name:       name,
 		metaPath:   filepath.Join(dir, "METADATA.json"),
 		renameFile: fsutil.Rename,
 	}
