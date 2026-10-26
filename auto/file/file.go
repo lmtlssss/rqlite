@@ -27,6 +27,9 @@ type Client struct {
 	timestamp bool
 
 	now func() time.Time
+	// renameFile is replaceable only by package-local fault-injection tests.
+	// Production uses fsutil.Rename when this field is nil.
+	renameFile func(string, string) error
 }
 
 // Options represents options for the file storage client.
@@ -115,6 +118,13 @@ func (c *Client) String() string {
 	return fmt.Sprintf("dir:%s, file:%s", c.dir, c.name)
 }
 
+func (c *Client) rename(old, new string) error {
+	if c.renameFile != nil {
+		return c.renameFile(old, new)
+	}
+	return fsutil.Rename(old, new)
+}
+
 // Upload uploads data from the reader to the file storage.
 func (c *Client) Upload(ctx context.Context, reader io.Reader, id string) (retErr error) {
 	filename := c.name
@@ -173,11 +183,11 @@ func (c *Client) Upload(ctx context.Context, reader io.Reader, id string) (retEr
 		return fmt.Errorf("failed to write temporary metadata file %s: %w", tmpMetaPath, err)
 	}
 
-	if err := fsutil.Rename(tmpPath, finalPath); err != nil {
+	if err := c.rename(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("failed to rename temporary file %s to %s: %w", tmpPath, finalPath, err)
 	}
 
-	if err := fsutil.Rename(tmpMetaPath, c.metaPath); err != nil {
+	if err := c.rename(tmpMetaPath, c.metaPath); err != nil {
 		fsutil.Remove(finalPath)
 		return fmt.Errorf("failed to rename temporary metadata file %s to %s: %w", tmpMetaPath, c.metaPath, err)
 	}
