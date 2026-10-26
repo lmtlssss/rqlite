@@ -28,4 +28,8 @@ jobs:
         if: runner.os == 'Linux'
         run: go test -race -count=1 ./auto/file
       - name: Verify all candidate Go sources are formatted
+        # Windows Git checkouts can normalize files to CRLF before gofmt.
+        # Linux and macOS enforce exact repository formatting; Windows
+        # continues to run the complete behavioral package tests.
+        if: runner.os != 'Windows'
         run: test -z "$(gofmt -l auto/file/file.go auto/file/file_atomic_test.go auto/file/transaction.go)"
