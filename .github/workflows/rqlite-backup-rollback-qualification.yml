@@ -1,0 +1,22 @@
+name: rqlite failed-backup-publication regression (isolated)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix-local-backup-publication-rollback-20261025
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Validate original and repaired recovery behavior
+        run: go test -count=1 -v -run 'TestUpload(MetadataRenameFailurePreservesLastGoodBackup|RecoveryAfterCrashBetweenDataAndMetadata|RollbackSameSecondTimestampCollision|MetadataRenameFailureWithoutPriorBackup)$' ./auto/file
+      - name: Run all file-backed storage client tests
+        run: go test -count=1 ./auto/file
