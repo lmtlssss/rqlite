@@ -111,3 +111,81 @@ func TestUploadMetadataRenameFailureWithoutPriorBackup(t *testing.T) {
 		t.Fatalf("CurrentID = %q, %v; want empty",id,err)
 	}
 }
+
+
+func TestUploadRecoveryAfterCrashBeforeDataRename(t *testing.T) {
+	ctx := context.Background()
+	c, err := NewClient(t.TempDir(), "backup.sqlite", nil)
+	if err != nil { t.Fatal(err) }
+	if err := c.Upload(ctx, bytes.NewReader([]byte("previous-valid")), "old"); err != nil { t.Fatal(err) }
+
+	finalPath := filepath.Join(c.dir, "backup.sqlite")
+	c.renameFile = func(src, dst string) error {
+		if dst == finalPath { panic("simulated crash before data rename") }
+		return fsutil.Rename(src, dst)
+	}
+	func() {
+		defer func() {
+			if r := recover(); r == nil { t.Error("did not inject crash") }
+		}()
+		_ = c.Upload(ctx, bytes.NewReader([]byte("not-published")), "new")
+	}()
+	restarted, err := NewClient(c.dir, c.name, nil)
+	if err != nil { t.Fatal(err) }
+	assertLastGoodFileBackup(t, restarted, "old", []byte("previous-valid"))
+}
+
+func TestUploadRecoveryAfterCrashAfterMetadataCommit(t *testing.T) {
+	ctx := context.Background()
+	c, err := NewClient(t.TempDir(), "backup.sqlite", nil)
+	if err != nil { t.Fatal(err) }
+	if err := c.Upload(ctx, bytes.NewReader([]byte("previous-valid")), "old"); err != nil { t.Fatal(err) }
+
+	c.renameFile = func(src, dst string) error {
+		if dst == c.metaPath {
+			if err := fsutil.Rename(src, dst); err != nil { return err }
+			panic("simulated crash after committed metadata rename")
+		}
+		return fsutil.Rename(src, dst)
+	}
+	func() {
+		defer func() {
+			if r := recover(); r == nil { t.Error("did not inject crash") }
+		}()
+		_ = c.Upload(ctx, bytes.NewReader([]byte("committed-new")), "new")
+	}()
+	restarted, err := NewClient(c.dir, c.name, nil)
+	if err != nil { t.Fatal(err) }
+	assertLastGoodFileBackup(t, restarted, "new", []byte("committed-new"))
+	// A fully committed restart should remove stale recovery artifacts.
+	if _,err := os.Stat(restarted.pendingPath()); !os.IsNotExist(err) {
+		t.Fatalf("pending journal remains after committed restart: %v",err)
+	}
+	if _,err := os.Stat(restarted.rollbackPath()); !os.IsNotExist(err) {
+		t.Fatalf("rollback file remains after committed restart: %v",err)
+	}
+}
+
+func TestUploadSameIDMetadataRollbackUsesGeneration(t *testing.T) {
+	ctx := context.Background()
+	c, err := NewClient(t.TempDir(), "backup.sqlite", nil)
+	if err != nil { t.Fatal(err) }
+	if err := c.Upload(ctx, bytes.NewReader([]byte("good")), "same-id"); err != nil { t.Fatal(err) }
+	old,err := c.CurrentMetadata(ctx)
+	if err != nil { t.Fatal(err) }
+
+	failure:= errors.New("metadata rename failed for reused identifier")
+	c.renameFile = func(src,dst string) error {
+		if dst == c.metaPath { return failure }
+		return fsutil.Rename(src,dst)
+	}
+	if err:=c.Upload(ctx,bytes.NewReader([]byte("bad")),"same-id"); !errors.Is(err,failure) {
+		t.Fatalf("Upload error = %v, want failure",err)
+	}
+	newMetadata,err := c.CurrentMetadata(ctx)
+	if err != nil { t.Fatal(err) }
+	if old.Generation != newMetadata.Generation {
+		t.Fatalf("previous backup generation changed on rollback")
+	}
+	assertLastGoodFileBackup(t,c,"same-id",[]byte("good"))
+}
