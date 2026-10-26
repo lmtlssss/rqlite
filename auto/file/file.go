@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rqlite/rqlite/v10/internal/fsutil"
@@ -26,6 +27,7 @@ type Client struct {
 	metaPath  string
 	timestamp bool
 
+	mu sync.Mutex
 	now func() time.Time
 	// renameFile is replaceable only by package-local fault-injection tests.
 	// Production uses fsutil.Rename when this field is nil.
@@ -41,7 +43,8 @@ type Options struct {
 type Metadata struct {
 	ID        string `json:"id"`
 	Timestamp int64  `json:"timestamp,omitempty"`
-	Name      string `json:"name,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Generation string `json:"generation,omitempty"`
 }
 
 // NewClient creates a new file storage client.
@@ -81,6 +84,9 @@ func NewClient(dir, name string, opt *Options) (*Client, error) {
 
 	if opt != nil {
 		c.timestamp = opt.Timestamp
+	}
+	if err := c.recoverPending(); err != nil {
+		return nil, fmt.Errorf("recover incomplete local backup: %w", err)
 	}
 	return c, nil
 }
@@ -127,6 +133,13 @@ func (c *Client) rename(old, new string) error {
 
 // Upload uploads data from the reader to the file storage.
 func (c *Client) Upload(ctx context.Context, reader io.Reader, id string) (retErr error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.recoverPending(); err != nil {
+		return fmt.Errorf("recover prior incomplete local backup: %w", err)
+	}
+
 	filename := c.name
 	if c.timestamp {
 		if c.now == nil {
@@ -168,10 +181,15 @@ func (c *Client) Upload(ctx context.Context, reader io.Reader, id string) (retEr
 	}
 
 	// Write metadata to temporary metadata file
+	generation, err := newGeneration()
+	if err != nil {
+		return err
+	}
 	metadata := Metadata{
-		ID:        id,
-		Timestamp: time.Now().UnixMilli(),
-		Name:      finalPath,
+		ID:         id,
+		Timestamp:  time.Now().UnixMilli(),
+		Name:       finalPath,
+		Generation: generation,
 	}
 
 	metadataBytes, err := json.Marshal(metadata)
@@ -182,14 +200,37 @@ func (c *Client) Upload(ctx context.Context, reader io.Reader, id string) (retEr
 	if err := os.WriteFile(tmpMetaPath, metadataBytes, 0644); err != nil {
 		return fmt.Errorf("failed to write temporary metadata file %s: %w", tmpMetaPath, err)
 	}
-
-	if err := c.rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("failed to rename temporary file %s to %s: %w", tmpPath, finalPath, err)
+	metaFile, err := os.OpenFile(tmpMetaPath, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("open temporary backup metadata for sync: %w", err)
+	}
+	if err := metaFile.Sync(); err != nil {
+		_ = metaFile.Close()
+		return fmt.Errorf("sync temporary backup metadata: %w", err)
+	}
+	if err := metaFile.Close(); err != nil {
+		return fmt.Errorf("close temporary backup metadata: %w", err)
 	}
 
+	// Preserve the previous completed file and durably record which metadata
+	// generation commits this replacement before touching the stable path.
+	if err := c.preparePending(finalPath, generation); err != nil {
+		return fmt.Errorf("stage local backup publication: %w", err)
+	}
+	if err := c.rename(tmpPath, finalPath); err != nil {
+		return c.finishPendingAfterError(fmt.Errorf("failed to rename temporary file %s to %s: %w", tmpPath, finalPath, err))
+	}
+	if err := fsutil.SyncDirMaybe(c.dir); err != nil {
+		return c.finishPendingAfterError(fmt.Errorf("sync uploaded backup path: %w", err))
+	}
 	if err := c.rename(tmpMetaPath, c.metaPath); err != nil {
-		fsutil.Remove(finalPath)
-		return fmt.Errorf("failed to rename temporary metadata file %s to %s: %w", tmpMetaPath, c.metaPath, err)
+		return c.finishPendingAfterError(fmt.Errorf("failed to rename temporary metadata file %s to %s: %w", tmpMetaPath, c.metaPath, err))
+	}
+	if err := fsutil.SyncDirMaybe(c.dir); err != nil {
+		return fmt.Errorf("sync committed local backup metadata: %w", err)
+	}
+	if err := c.recoverPending(); err != nil {
+		return fmt.Errorf("finalize completed local backup: %w", err)
 	}
 	return nil
 }
