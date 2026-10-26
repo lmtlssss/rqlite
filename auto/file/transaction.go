@@ -100,29 +100,63 @@ func (c *Client) recoverPending() error {
 		return fmt.Errorf("read backup metadata during recovery: %w", err)
 	}
 	committed := current.Generation == p.Generation && current.Name == p.Target
-	if !committed {
-		if p.HadPrior {
-			if _, err := os.Lstat(c.rollbackPath()); err != nil {
-				return fmt.Errorf("missing prior backup during recovery: %w", err)
-			}
-			if err := fsutil.Rename(c.rollbackPath(), p.Target); err != nil {
-				return fmt.Errorf("restore last completed local backup: %w", err)
-			}
-		} else if err := fsutil.Remove(p.Target); err != nil {
-			return fmt.Errorf("remove uncommitted local backup: %w", err)
+	if committed {
+		// The new metadata is the commit marker. Release the old inode
+		// before the journal; after a crash, redoing this cleanup is safe.
+		if err := fsutil.Remove(c.rollbackPath()); err != nil {
+			return fmt.Errorf("remove committed backup rollback link: %w", err)
 		}
+		if err := fsutil.SyncDirMaybe(c.dir); err != nil {
+			return fmt.Errorf("sync committed backup directory: %w", err)
+		}
+		if err := fsutil.Remove(c.pendingPath()); err != nil {
+			return fmt.Errorf("remove committed backup marker: %w", err)
+		}
+		return fsutil.SyncDirMaybe(c.dir)
 	}
 
-	// Keep the marker until rollback/commit cleanup is complete. An error
-	// leaves enough state for another startup to retry.
-	if err := fsutil.Remove(c.rollbackPath()); err != nil {
-		return fmt.Errorf("remove completed backup rollback link: %w", err)
+	if p.HadPrior {
+		// Keep the original rollback hardlink until AFTER recovery and
+		// deletion of the journal are durable. If we crash after putting
+		// the old data back, this function can safely repeat the restore.
+		oldInfo, err := os.Lstat(c.rollbackPath())
+		if err != nil {
+			return fmt.Errorf("missing prior backup during recovery: %w", err)
+		}
+		restorePath := c.metaPath + ".restore"
+		if info, err := os.Lstat(restorePath); err == nil {
+			// A previous recovery may have stopped after staging this link.
+			if !os.SameFile(oldInfo, info) {
+				return fmt.Errorf("staged recovery file differs from prior backup")
+			}
+		} else if os.IsNotExist(err) {
+			if err := os.Link(c.rollbackPath(), restorePath); err != nil {
+				return fmt.Errorf("stage prior backup recovery: %w", err)
+			}
+		} else {
+			return fmt.Errorf("inspect staged backup recovery: %w", err)
+		}
+		if err := c.rename(restorePath, p.Target); err != nil {
+			return fmt.Errorf("restore last completed local backup: %w", err)
+		}
+	} else if err := fsutil.Remove(p.Target); err != nil {
+		return fmt.Errorf("remove uncommitted local backup: %w", err)
 	}
 	if err := fsutil.SyncDirMaybe(c.dir); err != nil {
-		return fmt.Errorf("sync backup recovery directory: %w", err)
+		return fmt.Errorf("sync recovered local backup data: %w", err)
 	}
+
+	// For a rollback, remove the marker BEFORE the hardlink: a crash after
+	// removing the marker leaves an orphan hardlink to the restored inode,
+	// which startup can verify and clean without risking the old backup.
 	if err := fsutil.Remove(c.pendingPath()); err != nil {
-		return fmt.Errorf("remove completed backup marker: %w", err)
+		return fmt.Errorf("remove rolled-back backup marker: %w", err)
+	}
+	if err := fsutil.SyncDirMaybe(c.dir); err != nil {
+		return fmt.Errorf("sync rolled-back backup marker removal: %w", err)
+	}
+	if err := fsutil.Remove(c.rollbackPath()); err != nil {
+		return fmt.Errorf("remove completed backup rollback link: %w", err)
 	}
 	return fsutil.SyncDirMaybe(c.dir)
 }
