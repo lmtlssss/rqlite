@@ -209,3 +209,39 @@ func TestUploadRecoveryClearsOrphanPrejournalHardLink(t *testing.T) {
 	}
 	assertLastGoodFileBackup(t, restarted, "new", []byte("next"))
 }
+
+func TestUploadRecoveryRepeatsAfterInterruptedRollback(t *testing.T) {
+	ctx := context.Background()
+	c, err := NewClient(t.TempDir(), "backup.sqlite", nil)
+	if err != nil { t.Fatal(err) }
+	if err := c.Upload(ctx, bytes.NewReader([]byte("prior-valid")), "old"); err != nil { t.Fatal(err) }
+
+	dataPath := filepath.Join(c.dir, c.name)
+	failure := errors.New("reject updated metadata")
+	c.renameFile = func(src, dst string) error {
+		if dst == c.metaPath { return failure }
+		if src == c.metaPath+".restore" && dst == dataPath {
+			if err := fsutil.Rename(src, dst); err != nil { return err }
+			panic("crash after restoring old data but before deleting journal")
+		}
+		return fsutil.Rename(src,dst)
+	}
+	func() {
+		defer func() {
+			if r:=recover(); r==nil {
+				t.Error("failed to inject rollback-recovery crash")
+			}
+		}()
+		_ = c.Upload(ctx, bytes.NewReader([]byte("uncommitted-new")), "new")
+	}()
+
+	// Recovery must be idempotent: the rollback link remains available
+	// if the process stopped after restoring the old inode to its path.
+	restarted, err := NewClient(c.dir, c.name, nil)
+	if err != nil { t.Fatal(err) }
+	assertLastGoodFileBackup(t, restarted, "old", []byte("prior-valid"))
+	if err:= restarted.Upload(ctx, bytes.NewReader([]byte("later")), "later"); err !=nil {
+		t.Fatalf("new upload after interrupted rollback failed: %v", err)
+	}
+	assertLastGoodFileBackup(t, restarted, "later", []byte("later"))
+}
