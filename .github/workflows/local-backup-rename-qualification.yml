@@ -28,8 +28,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Inspect formatting and run behavioral proof
-        run: gofmt -d auto/file/file.go auto/file/metadata_rename_failure_test.go
+      - name: Check formatting on LF-normalized checkout
+        if: runner.os != 'Windows'
+        run: test -z "$(gofmt -l auto/file/file.go auto/file/metadata_rename_failure_test.go)"
       - name: Run deterministic metadata rename fault regression
         run: go test -count=1 -run 'TestUpload(MetadataRenameFailurePreservesLastSuccessfulBackup|FirstMetadataRenameFailureLeavesNoPublishedFile|PayloadRenameFailureKeepsPreviousBackup|MetadataRollbackFailurePreservesRecoverablePriorCopy|SuccessfulReplacementRemovesRollbackCopy)$' ./auto/file
       - name: Full auto/file package
