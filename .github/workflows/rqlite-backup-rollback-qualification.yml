@@ -27,5 +27,16 @@ jobs:
       - name: Run race checks on Linux
         if: runner.os == 'Linux'
         run: go test -race -count=1 ./auto/file
-      - name: Inspect formatter
-        run: gofmt -d auto/file/file.go auto/file/file_atomic_test.go auto/file/transaction.go
+      - name: Format candidate files for commit
+        if: runner.os == 'Linux'
+        run: gofmt -w auto/file/file.go auto/file/file_atomic_test.go auto/file/transaction.go
+      - name: Export exact formatted files for review
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-go-source
+          path: |
+            auto/file/file.go
+            auto/file/file_atomic_test.go
+            auto/file/transaction.go
+          if-no-files-found: error
