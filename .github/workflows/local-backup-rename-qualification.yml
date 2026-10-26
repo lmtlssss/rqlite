@@ -21,8 +21,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Go format check on affected files
-        run: test -z "$(gofmt -l auto/file/file.go auto/file/metadata_rename_failure_test.go)"
+      - name: Inspect formatting and run behavioral proof
+        run: gofmt -d auto/file/file.go auto/file/metadata_rename_failure_test.go
       - name: Run deterministic metadata rename fault regression
         run: go test -count=1 -run 'TestUpload(MetadataRenameFailurePreservesLastSuccessfulBackup|FirstMetadataRenameFailureLeavesNoPublishedFile|PayloadRenameFailureKeepsPreviousBackup)$' ./auto/file
       - name: Full auto/file package
