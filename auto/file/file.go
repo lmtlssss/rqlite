@@ -27,7 +27,7 @@ type Client struct {
 	metaPath  string
 	timestamp bool
 
-	mu sync.Mutex
+	mu  sync.Mutex
 	now func() time.Time
 	// renameFile is replaceable only by package-local fault-injection tests.
 	// Production uses fsutil.Rename when this field is nil.
@@ -41,8 +41,8 @@ type Options struct {
 
 // Metadata represents metadata stored in the metadata file.
 type Metadata struct {
-	ID        string `json:"id"`
-	Timestamp int64  `json:"timestamp,omitempty"`
+	ID         string `json:"id"`
+	Timestamp  int64  `json:"timestamp,omitempty"`
 	Name       string `json:"name,omitempty"`
 	Generation string `json:"generation,omitempty"`
 }
